@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>나의 가계부</title>
+<style>
+  :root {
+    --income: #2f9e44;
+    --expense: #e03131;
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --border: #e2e5e9;
+    --text: #212529;
+    --muted: #868e96;
+    --accent: #4263eb;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+  }
+  .container {
+    max-width: 760px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 24px;
+    margin-bottom: 4px;
+  }
+  .sub {
+    color: var(--muted);
+    margin-bottom: 20px;
+    font-size: 14px;
+  }
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .summary .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+  }
+  .summary .card .label {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .summary .card .value {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .value.income { color: var(--income); }
+  .value.expense { color: var(--expense); }
+  .value.balance { color: var(--accent); }
+
+  form {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  form .full { grid-column: 1 / -1; }
+  label {
+    font-size: 12px;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+  input, select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    background: #fff;
+  }
+  .type-toggle {
+    display: flex;
+    gap: 8px;
+  }
+  .type-toggle button {
+    flex: 1;
+    padding: 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .type-toggle button.active[data-type="income"] {
+    background: var(--income);
+    color: #fff;
+    border-color: var(--income);
+  }
+  .type-toggle button.active[data-type="expense"] {
+    background: var(--expense);
+    color: #fff;
+    border-color: var(--expense);
+  }
+  .submit-btn {
+    grid-column: 1 / -1;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  .submit-btn:hover { opacity: 0.9; }
+
+  .filter-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .filter-bar select {
+    width: auto;
+  }
+
+  .list {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .item:last-child { border-bottom: none; }
+  .item .left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .item .cat {
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .item .memo {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .item .date {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .item .right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .item .amount {
+    font-weight: 700;
+    font-size: 15px;
+    white-space: nowrap;
+  }
+  .item .amount.income { color: var(--income); }
+  .item .amount.expense { color: var(--expense); }
+  .item .del {
+    border: none;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 4px;
+  }
+  .item .del:hover { color: var(--expense); }
+
+  .empty {
+    text-align: center;
+    padding: 40px 16px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  @media (max-width: 480px) {
+    .summary { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>나의 가계부</h1>
+  <div class="sub" id="monthLabel"></div>
+
+  <div class="summary">
+    <div class="card">
+      <div class="label">수입</div>
+      <div class="value income" id="totalIncome">0원</div>
+    </div>
+    <div class="card">
+      <div class="label">지출</div>
+      <div class="value expense" id="totalExpense">0원</div>
+    </div>
+    <div class="card">
+      <div class="label">잔액</div>
+      <div class="value balance" id="totalBalance">0원</div>
+    </div>
+  </div>
+
+  <form id="entryForm">
+    <div class="full type-toggle">
+      <button type="button" data-type="expense" class="active">지출</button>
+      <button type="button" data-type="income">수입</button>
+    </div>
+    <div>
+      <label>날짜</label>
+      <input type="date" id="date" required>
+    </div>
+    <div>
+      <label>금액</label>
+      <input type="number" id="amount" placeholder="0" min="0" required>
+    </div>
+    <div>
+      <label>분류</label>
+      <select id="category">
+        <option>식비</option>
+        <option>교통</option>
+        <option>주거/관리비</option>
+        <option>쇼핑</option>
+        <option>의료</option>
+        <option>교육</option>
+        <option>문화/여가</option>
+        <option>급여</option>
+        <option>용돈</option>
+        <option>기타</option>
+      </select>
+    </div>
+    <div>
+      <label>메모</label>
+      <input type="text" id="memo" placeholder="메모 (선택)">
+    </div>
+    <button type="submit" class="submit-btn">추가하기</button>
+  </form>
+
+  <div class="filter-bar">
+    <select id="monthFilter"></select>
+    <select id="typeFilter">
+      <option value="all">전체</option>
+      <option value="income">수입만</option>
+      <option value="expense">지출만</option>
+    </select>
+  </div>
+
+  <div class="list" id="list"></div>
+</div>
+
+<script>
+const STORAGE_KEY = 'gagyebu_entries';
+let entries = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+let currentType = 'expense';
+
+const form = document.getElementById('entryForm');
+const dateInput = document.getElementById('date');
+const amountInput = document.getElementById('amount');
+const categoryInput = document.getElementById('category');
+const memoInput = document.getElementById('memo');
+const listEl = document.getElementById('list');
+const monthFilter = document.getElementById('monthFilter');
+const typeFilter = document.getElementById('typeFilter');
+const monthLabel = document.getElementById('monthLabel');
+
+dateInput.valueAsDate = new Date();
+
+document.querySelectorAll('.type-toggle button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.type-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentType = btn.dataset.type;
+  });
+});
+
+function save() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+}
+
+function formatWon(n) {
+  return n.toLocaleString('ko-KR') + '원';
+}
+
+function getMonthKey(dateStr) {
+  return dateStr.slice(0, 7); // YYYY-MM
+}
+
+function refreshMonthOptions() {
+  const months = Array.from(new Set(entries.map(e => getMonthKey(e.date)))).sort().reverse();
+  const currentVal = monthFilter.value;
+  monthFilter.innerHTML = '<option value="all">전체 기간</option>' +
+    months.map(m => `<option value="${m}">${m.replace('-', '년 ')}월</option>`).join('');
+  if (months.includes(currentVal) || currentVal === 'all') {
+    monthFilter.value = currentVal;
+  } else {
+    monthFilter.value = months.length ? months[0] : 'all';
+  }
+}
+
+function render() {
+  refreshMonthOptions();
+  const mFilter = monthFilter.value;
+  const tFilter = typeFilter.value;
+
+  let filtered = entries.filter(e => {
+    if (mFilter !== 'all' && getMonthKey(e.date) !== mFilter) return false;
+    if (tFilter !== 'all' && e.type !== tFilter) return false;
+    return true;
+  });
+
+  filtered.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+
+  let income = 0, expense = 0;
+  filtered.forEach(e => {
+    if (e.type === 'income') income += e.amount;
+    else expense += e.amount;
+  });
+
+  document.getElementById('totalIncome').textContent = formatWon(income);
+  document.getElementById('totalExpense').textContent = formatWon(expense);
+  document.getElementById('totalBalance').textContent = formatWon(income - expense);
+
+  monthLabel.textContent = mFilter === 'all' ? '전체 기간 내역' : `${mFilter.replace('-', '년 ')}월 내역`;
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = '<div class="empty">아직 내역이 없어요. 위에서 추가해보세요.</div>';
+    return;
+  }
+
+  listEl.innerHTML = filtered.map(e => `
+    <div class="item" data-id="${e.id}">
+      <div class="left">
+        <div class="cat">${escapeHtml(e.category)}</div>
+        <div class="memo">${e.memo ? escapeHtml(e.memo) : ''}</div>
+        <div class="date">${e.date}</div>
+      </div>
+      <div class="right">
+        <div class="amount ${e.type}">${e.type === 'income' ? '+' : '-'}${formatWon(e.amount)}</div>
+        <button class="del" data-id="${e.id}" title="삭제">&times;</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+form.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const amount = parseInt(amountInput.value, 10);
+  if (!amount || amount <= 0) return;
+
+  entries.push({
+    id: Date.now(),
+    type: currentType,
+    date: dateInput.value,
+    amount: amount,
+    category: categoryInput.value,
+    memo: memoInput.value.trim()
+  });
+
+  save();
+  amountInput.value = '';
+  memoInput.value = '';
+  render();
+});
+
+listEl.addEventListener('click', (ev) => {
+  if (ev.target.classList.contains('del')) {
+    const id = Number(ev.target.dataset.id);
+    entries = entries.filter(e => e.id !== id);
+    save();
+    render();
+  }
+});
+
+monthFilter.addEventListener('change', render);
+typeFilter.addEventListener('change', render);
+
+render();
+</script>
+</body>
+</html>
