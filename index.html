@@ -623,7 +623,29 @@
   .toast.warn { background: linear-gradient(135deg, #ff9d6e, #ff5f78); }
   .confetti { position: fixed; z-index: 80; pointer-events: none; font-size: 18px; will-change: transform, opacity; }
 
-  .foot { text-align: center; font-size: 11.5px; color: var(--muted); padding: 6px 0 4px; }
+  .foot {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--muted);
+    padding: 6px 0 4px;
+  }
+  .wipe {
+    border: 0;
+    cursor: pointer;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--coral);
+    background: rgba(255,255,255,.7);
+    padding: 4px 10px;
+    border-radius: 999px;
+    transition: background .2s, transform .15s;
+  }
+  .wipe:hover { background: var(--coral-soft); transform: translateY(-1px); }
 
   .sync {
     display: inline-flex;
@@ -733,7 +755,10 @@
     <div id="monthList"></div>
   </div>
 
-  <div class="foot"><span class="sync" id="syncBadge"><i></i><span id="syncText">동기화됨</span></span></div>
+  <div class="foot">
+    <span class="sync" id="syncBadge"><i></i><span id="syncText">동기화됨</span></span>
+    <button class="wipe" id="wipeBtn">🧹 전체 초기화</button>
+  </div>
 </div>
 
 <button class="fab" id="fab" title="내역 추가">＋</button>
@@ -790,6 +815,17 @@
   <div class="btns">
     <button class="no" id="alertNo">다시 볼게요</button>
     <button class="yes" id="alertYes">기록할래요</button>
+  </div>
+</div>
+
+<div class="alertbox" id="wipeBox" role="alertdialog" aria-modal="true">
+  <span class="face">🧹</span>
+  <h3>모두 지울까요?</h3>
+  <div class="amt" id="wipeCount">0건</div>
+  <p>예시 데이터를 포함해 <b>지금까지의 모든 내역</b>이 사라져요.<br>되돌릴 수 없어요!</p>
+  <div class="btns">
+    <button class="no" id="wipeNo">그냥 둘래요</button>
+    <button class="yes" id="wipeYes">전부 지울래요</button>
   </div>
 </div>
 
@@ -1142,6 +1178,7 @@ function closeSheet() {
   $('backdrop').classList.remove('open');
   $('sheet').classList.remove('open');
   $('alertBox').classList.remove('open');
+  $('wipeBox').classList.remove('open');
   editingId = null;
 }
 function syncTypeSeg() {
@@ -1289,7 +1326,8 @@ $('closeSheet').onclick = closeSheet;
 $('backdrop').onclick = closeSheet;
 document.addEventListener('keydown', function (ev) {
   if (ev.key === 'Escape') { closeSheet(); return; }
-  if ($('sheet').classList.contains('open') || $('alertBox').classList.contains('open')) return;
+  if ($('sheet').classList.contains('open') || $('alertBox').classList.contains('open') ||
+      $('wipeBox').classList.contains('open')) return;
   if (ev.key === 'ArrowLeft') $('prevM').click();
   if (ev.key === 'ArrowRight') $('nextM').click();
 });
@@ -1442,6 +1480,32 @@ function migrateLegacy() {
     toast('예전 내역 ' + rows.length + '건을 DB로 옮겼어요 📦');
   });
 }
+
+/* ---- 전체 초기화 ---- */
+$('wipeBtn').onclick = function () {
+  if (!entries.length) { toast('이미 비어 있어요 🧺'); return; }
+  $('wipeCount').textContent = entries.length + '건';
+  $('backdrop').classList.add('open');
+  $('wipeBox').classList.add('open');
+};
+$('wipeNo').onclick = function () {
+  closeSheet();
+  toast('그대로 뒀어요 🌿');
+};
+$('wipeYes').onclick = function () {
+  var n = entries.length;
+  closeSheet();
+  entries = [];
+  renderAll();
+  beginOp();
+  sb.from('entries').delete().gt('id', 0).then(function (res) {
+    endOp(!res.error);
+    if (res.error) toast('초기화하지 못했어요 😢 ' + errText(res.error), 'warn');
+    else toast(n + '건을 모두 지웠어요 🧹');
+    /* 지우는 사이에 들어온 기록이 있을 수 있으니 DB 상태를 다시 읽어 맞춘다 */
+    return refresh();
+  });
+};
 
 var appReady = false;
 
