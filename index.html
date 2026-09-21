@@ -625,6 +625,27 @@
 
   .foot { text-align: center; font-size: 11.5px; color: var(--muted); padding: 6px 0 4px; }
 
+  .sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--muted);
+    background: rgba(255,255,255,.7);
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .sync i {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--mint);
+    font-style: normal;
+  }
+  .sync.busy i { background: var(--yellow); animation: pulse 1s ease-in-out infinite; }
+  .sync.err i { background: var(--coral); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
   @keyframes popIn { 0% { opacity: 0; transform: scale(.82) translateY(8px); } 60% { opacity: 1; transform: scale(1.04) translateY(-2px); } 100% { opacity: 1; transform: none; } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
@@ -712,7 +733,7 @@
     <div id="monthList"></div>
   </div>
 
-  <div class="foot">기록은 이 브라우저에만 저장돼요 🔒</div>
+  <div class="foot"><span class="sync" id="syncBadge"><i></i><span id="syncText">동기화됨</span></span></div>
 </div>
 
 <button class="fab" id="fab" title="내역 추가">＋</button>
@@ -774,15 +795,123 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script>
-/* ============ 데이터 (브라우저 localStorage에만 저장) ============ */
-var KEY = 'gagyebu_entries';
-var BIG = 100000; /* 큰 지출 경고 기준: 10만원 */
-var entries = [];
-try { entries = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (e) { entries = []; }
-if (!Array.isArray(entries)) entries = [];
+/* ============ 데이터 (Supabase에 저장) ============ */
+var SUPABASE_URL = 'https://edrzispsyektwgmueglb.supabase.co';
+var SUPABASE_KEY = 'sb_publishable_WvAHBNdadUih19MoNW4SqQ_IVEBsE_S';
+var LEGACY_KEY = 'gagyebu_entries';        /* 예전 localStorage 키 */
+var BACKUP_KEY = 'gagyebu_entries_backup'; /* 업로드 후 안전용 사본 */
 
-function save() { try { localStorage.setItem(KEY, JSON.stringify(entries)); } catch (e) {} }
+var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+var BIG = 100000; /* 큰 지출 경고 기준: 10만원 */
+var entries = [];  /* 화면이 그리는 원본. DB와 낙관적으로 동기화된다. */
+
+/* ---- 동기화 상태 배지 ---- */
+var busyOps = 0;
+function setSync(cls, text) {
+  var b = $('syncBadge');
+  if (!b) return;
+  b.className = 'sync' + (cls ? ' ' + cls : '');
+  $('syncText').textContent = text;
+}
+function beginOp() { busyOps++; setSync('busy', '저장 중…'); }
+function endOp(ok) {
+  busyOps = Math.max(0, busyOps - 1);
+  if (busyOps) return;
+  setSync(ok ? '' : 'err', ok ? '동기화됨' : '동기화 실패');
+}
+function errText(err) {
+  if (!err) return '';
+  if (err.message && /Failed to fetch|NetworkError/i.test(err.message)) return '네트워크 연결을 확인해주세요';
+  return err.message || String(err);
+}
+
+/* ---- DB 행 <-> 화면 객체 ---- */
+function fromRow(r) {
+  return { id: r.id, type: r.type, date: r.date, amount: Number(r.amount), category: r.category, memo: r.memo || '' };
+}
+function toRow(e) {
+  return { type: e.type, date: e.date, amount: e.amount, category: e.category, memo: e.memo || '' };
+}
+
+/* ---- 읽기 ---- */
+function loadEntries() {
+  return sb.from('entries').select('id,type,date,amount,category,memo')
+    .order('date', { ascending: false }).order('id', { ascending: false })
+    .then(function (res) {
+      if (res.error) throw res.error;
+      entries = res.data.map(fromRow);
+      return entries;
+    });
+}
+function refresh() {
+  beginOp();
+  return loadEntries().then(function () { renderAll(); endOp(true); })
+    .catch(function (err) { endOp(false); toast('내역을 불러오지 못했어요 — ' + errText(err), 'warn'); });
+}
+
+/* ---- 쓰기 (낙관적 갱신: 화면부터 바꾸고 DB는 뒤따라간다) ---- */
+/* 임시 id로 이미 그려진 DOM을 DB가 준 실제 id로 바꿔 끼운다.
+   (이걸 안 하면 방금 추가한 내역을 눌러도 목록에서 못 찾아 수정·삭제가 안 된다) */
+function patchDomId(oldId, newId) {
+  ['data-id', 'data-del'].forEach(function (attr) {
+    var nodes = document.querySelectorAll('[' + attr + '="' + oldId + '"]');
+    Array.prototype.forEach.call(nodes, function (n) { n.setAttribute(attr, newId); });
+  });
+}
+
+function dbInsert(e) {
+  var tmpId = e.id;
+  beginOp();
+  e._sync = sb.from('entries').insert(toRow(e)).select('id').single().then(function (res) {
+    delete e._sync;
+    if (res.error) {
+      entries = entries.filter(function (x) { return x !== e; });
+      endOp(false); renderAll();
+      toast('저장하지 못했어요 😢 ' + errText(res.error), 'warn');
+      return null;
+    }
+    e.id = res.data.id;
+    patchDomId(tmpId, e.id);
+    endOp(true);
+    return e.id;
+  });
+  return e._sync;
+}
+/* 방금 추가해 아직 id를 못 받은 내역이면 insert가 끝날 때까지 기다린다 */
+function settledId(e) {
+  return e._sync ? e._sync : Promise.resolve(e.id);
+}
+function dbUpdate(e) {
+  return settledId(e).then(function (id) {
+    if (!id) return;
+    beginOp();
+    return sb.from('entries').update(toRow(e)).eq('id', id).then(function (res) {
+      if (res.error) {
+        endOp(false);
+        toast('수정을 반영하지 못했어요 😢 ' + errText(res.error), 'warn');
+        return refresh();
+      }
+      endOp(true);
+    });
+  });
+}
+function dbDelete(e) {
+  return settledId(e).then(function (id) {
+    if (!id) return;
+    beginOp();
+    return sb.from('entries').delete().eq('id', id).then(function (res) {
+      if (res.error) {
+        endOp(false);
+        toast('삭제하지 못했어요 😢 ' + errText(res.error), 'warn');
+        return refresh();
+      }
+      endOp(true);
+    });
+  });
+}
 
 /* ============ 분류 ============ */
 var CATS = {
@@ -1134,8 +1263,13 @@ function removeEntry(id, node) {
   } else finishRemove(id);
 }
 function finishRemove(id) {
-  entries = entries.filter(function (e) { return e.id !== id; });
-  save();
+  var gone = null;
+  entries = entries.filter(function (e) {
+    if (e.id === id) { gone = e; return false; }
+    return true;
+  });
+  if (!gone) return;
+  dbDelete(gone);
   renderAll();
   toast('내역을 지웠어요 🗑️');
 }
@@ -1241,17 +1375,20 @@ function commitSave(amount) {
     entries.forEach(function (e) {
       if (e.id === editingId) {
         e.type = formType; e.date = date; e.amount = amount; e.category = formCat; e.memo = memo;
+        dbUpdate(e);
       }
     });
     toast(big ? '⚠️ 수정했어요 — 10만원이 넘는 큰 지출이에요!' : '수정했어요 ✏️', big ? 'warn' : '');
   } else {
-    entries.push({ id: Date.now(), type: formType, date: date, amount: amount, category: formCat, memo: memo });
+    /* id는 DB가 내려준다. 그 전까지는 정렬상 맨 위로 오도록 임시 번호를 쓴다. */
+    var fresh = { id: Date.now(), type: formType, date: date, amount: amount, category: formCat, memo: memo };
+    entries.push(fresh);
+    dbInsert(fresh);
     if (big) toast('⚠️ 큰 지출 기록! ' + won(amount) + ' — 이번 달 예산을 한 번 확인해봐요', 'warn');
     else toast((formType === 'income' ? '수입' : '지출') + ' ' + won(amount) + ' 기록 완료!');
     confetti(r.left + r.width / 2, r.top, big ? 'warn' : formType);
   }
 
-  save();
   selected = date;
   var p = date.split('-').map(Number);
   viewY = p[0]; viewM = p[1] - 1;
@@ -1271,9 +1408,64 @@ window.addEventListener('resize', function () {
   if ($('sheet').classList.contains('open')) moveSegPill($('typeSeg'), $('typePill'));
 });
 
+/* 예전 localStorage 내역을 DB로 한 번만 옮긴다 */
+function migrateLegacy() {
+  var raw = null;
+  try { raw = localStorage.getItem(LEGACY_KEY); } catch (e) { return; }
+  if (!raw) return;
+
+  var old = null;
+  try { old = JSON.parse(raw); } catch (e) {}
+  var rows = (Array.isArray(old) ? old : []).filter(function (e) {
+    return e && (e.type === 'income' || e.type === 'expense') &&
+      /^\d{4}-\d{2}-\d{2}$/.test(e.date || '') && Number(e.amount) > 0;
+  }).map(function (e) {
+    return {
+      type: e.type, date: e.date, amount: Math.round(Number(e.amount)),
+      category: String(e.category || '기타').slice(0, 40),
+      memo: String(e.memo || '').slice(0, 200)
+    };
+  });
+
+  if (!rows.length) { try { localStorage.removeItem(LEGACY_KEY); } catch (e) {} return; }
+  if (entries.length) {
+    /* DB에 이미 내역이 있으면 중복될 수 있으니 건드리지 않는다 */
+    toast('이 브라우저에 예전 내역 ' + rows.length + '건이 남아 있어요. DB에 이미 내역이 있어 자동 업로드는 건너뛰었어요.', 'warn');
+    return;
+  }
+
+  setSync('busy', '예전 내역 옮기는 중…');
+  return sb.from('entries').insert(rows).select('id,type,date,amount,category,memo').then(function (res) {
+    if (res.error) { toast('예전 내역을 옮기지 못했어요 — ' + errText(res.error), 'warn'); return; }
+    entries = res.data.map(fromRow);
+    try { localStorage.setItem(BACKUP_KEY, raw); localStorage.removeItem(LEGACY_KEY); } catch (e) {}
+    toast('예전 내역 ' + rows.length + '건을 DB로 옮겼어요 📦');
+  });
+}
+
+var appReady = false;
+
+/* 다른 기기에서 기록했을 수 있으니 탭으로 돌아오면 다시 읽어온다 */
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden && appReady && !busyOps) refresh();
+});
+
 /* ============ 시작 ============ */
 renderAll();
 moveSegPill($('seg'), $('segPill'));
+setSync('busy', '불러오는 중…');
+
+loadEntries()
+  .then(migrateLegacy)
+  .then(function () {
+    appReady = true;
+    renderAll();
+    setSync('', '동기화됨');
+  })
+  .catch(function (err) {
+    setSync('err', '불러오기 실패');
+    toast('내역을 불러오지 못했어요 — ' + errText(err), 'warn');
+  });
 </script>
 </body>
 </html>
